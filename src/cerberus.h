@@ -1,6 +1,6 @@
 #pragma once
 
-#include <Arduino.h>
+#include <stdint.h>
 
 // CAT firmware state
 extern volatile bool mode;	/** false = 6502 mode, true = Z80 mode**/
@@ -8,8 +8,8 @@ extern volatile bool cpurunning;			/** true = CPU is running, CAT should not use
 
 // ram access
 extern uint8_t cerb_ram[65536];
-extern void cpoke(uint16_t addr, uint8_t val);
-extern byte cpeek(unsigned int address);
+static inline void cpoke(uint16_t addr, uint8_t val) { cerb_ram[addr] = val; }
+static inline uint8_t cpeek(uint16_t address) { return cerb_ram[address]; }
 extern unsigned int cpeekW(unsigned int address);
 extern void cpokeW(unsigned int address, unsigned int data);
 

@@ -320,8 +320,6 @@ const uint8_t cerbicon_img[] = {
 
 uint8_t cerb_ram[65536];
 
-void cpoke(uint16_t addr, uint8_t val) { cerb_ram[addr] = val; }
-byte cpeek(unsigned int address) { return cerb_ram[address]; }
 unsigned int cpeekW(unsigned int address) {
   return (cpeek(address) | (cpeek(address+1) << 8));
 }
