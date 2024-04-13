@@ -317,16 +317,8 @@ const uint8_t cerbicon_img[] = {
     0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
     0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20
 };
-
 uint8_t cerb_ram[65536];
 
-unsigned int cpeekW(unsigned int address) {
-  return (cpeek(address) | (cpeek(address+1) << 8));
-}
-void cpokeW(unsigned int address, unsigned int data) {
-	cpoke(address, data & 0xFF);
-	cpoke(address + 1, (data >> 8) & 0xFF);
-}
 void cpokeL(unsigned int address, unsigned long data) {
 	cpoke(address, data & 0xFF);
 	cpoke(address + 1, (data >> 8) & 0xFF);
@@ -1391,6 +1383,7 @@ void loop()
 {
     char buf[64];
     int64_t t = esp_timer_get_time();
+
     for (;;) {
         cpuInterrupt();
         cat_loop();
@@ -1403,7 +1396,9 @@ void loop()
         } while (now - t < 20000);
 
 #ifdef DEBUG
-        debug_log("50Hz real elapsed: %lld\r\n", now - t);
+        if (cpurunning) {
+            debug_log("CPU clock %lld khz\r\n", (fast ? 8000 : 4000) * 20000/ (now - t));
+        }
 #endif /* DEBUG */
         t = now;
     }
