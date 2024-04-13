@@ -2,8 +2,16 @@
 #include "fabgl.h"
 #include "fabglconf.h"
 #include "fabutils.h"
+#include <dirent.h>
 #include "emudevs/Z80.h"
+#include "emudevs/MOS6502.h"
+#include "cerberus.h"
 #include <string.h>
+
+#define DEBUG 1
+
+void debug_log(const char *format, ...) __attribute__((format(printf, 1, 2)));
+int load(String filename, unsigned int startAddr);
 
 fabgl::PS2Controller PS2Controller;
 fabgl::VGADirectController VGAController;
@@ -52,9 +60,12 @@ void(* resetFunc) (void) = 0;       		/** Software reset fuction at address 0 **
 #define STATUS_POWER 10
 #define STATUS_EOF 11
 
+#define PS2_ESC 27
 #define PS2_F12 (-fabgl::VK_F12)
 #define PS2_ENTER 13
-#define PS2_DELETE 8
+// yeah these really are the same in PS2Keyboard.h
+#define PS2_DELETE 127
+#define PS2_BACKSPACE 127
 #define PS2_UPARROW (-fabgl::VK_UP)
 #define PS2_LEFTARROW (-fabgl::VK_LEFT)
 #define PS2_DOWNARROW (-fabgl::VK_DOWN)
@@ -313,6 +324,39 @@ uint8_t cerb_ram[65536];
 
 void cpoke(uint16_t addr, uint8_t val) { cerb_ram[addr] = val; }
 byte cpeek(unsigned int address) { return cerb_ram[address]; }
+unsigned int cpeekW(unsigned int address) {
+  return (cpeek(address) | (cpeek(address+1) << 8));
+}
+void cpokeW(unsigned int address, unsigned int data) {
+	cpoke(address, data & 0xFF);
+	cpoke(address + 1, (data >> 8) & 0xFF);
+}
+void cpokeL(unsigned int address, unsigned long data) {
+	cpoke(address, data & 0xFF);
+	cpoke(address + 1, (data >> 8) & 0xFF);
+	cpoke(address + 2, (data >> 16) & 0xFF);
+	cpoke(address + 3, (data >> 24) & 0xFF);
+}
+
+boolean cpokeStr(unsigned int address, String text) {
+	unsigned int i;
+	for(i = 0; i < text.length(); i++) {
+		cpoke(address + i, text[i]);
+	}
+	cpoke(address + i, 0);
+	return true;
+}
+
+boolean cpeekStr(unsigned int address, volatile char * dest, int max) {
+	unsigned int i;
+	byte c;
+	for(i = 0; i < max; i++) {
+		c = cpeek(address + i);
+		dest[i] = c;
+		if(c == 0) return true;
+	}
+	return false;
+}
 #define tone(a,b,c)
 
 void cprintChar(byte x, byte y, byte token) {
@@ -422,16 +466,6 @@ void cprintStatus(byte status) {
 }
 
 
-void errPrint(const char *msg) {
-    uint16_t addr = 0xf800;
-
-    while (*msg) {
-        cpoke(addr, *msg);
-        addr++;
-        msg++;
-    }
-}
-
 void cprintBanner() {
 	/** Load the CERBERUS icon image on the screen ************/
     const uint8_t *dataFile2 = cerbicon_img;
@@ -497,30 +531,53 @@ void IRAM_ATTR drawCerberusScanline(void * arg, uint8_t * dest, int scanLine)
     }
 }
 
+void errPrint(const char *msg) {
+    uint16_t addr = 0xf800;
+
+    while (*msg) {
+        cpoke(addr, *msg);
+        addr++;
+        msg++;
+    }
+}
+
 void load_chardefs() {
     memcpy(&cerb_ram[0xf000], chardefs, sizeof chardefs);
 }
 
-fabgl::Z80 cpu_z80;
+extern fabgl::Z80 z80; // in emu_cpu.cpp
+extern fabgl::MOS6502 m6502; // in emu_cpu.cpp
+extern void init_cpus(); // in emu_cpu.cpp
+extern void cpu_clockcycles(int num_clocks);
 
 void setup()
 {
+    Serial.begin(115200);
     mainTaskHandle = xTaskGetCurrentTaskHandle();
 
     // init cerberus ram
     memset(cerb_ram, 0, sizeof cerb_ram);
     load_chardefs();
 
-    Serial.begin(9600);
+    init_cpus();
+
     PS2Controller.begin(PS2Preset::KeyboardPort0_MousePort1, KbdMode::CreateVirtualKeysQueue);
     PS2Controller.keyboard()->setLayout(&fabgl::UKLayout);
     PS2Controller.keyboard()->setCodePage(fabgl::CodePages::get(1252));
+    PS2Controller.keyboard()->enableVirtualKeys(true, true);
 
     VGAController.begin();
     VGAController.setScanlinesPerCallBack(scanlinesPerCallback);
     VGAController.setDrawScanlineCallback(drawCerberusScanline);
     VGAController.setResolution(VGA_640x480_60Hz);
+    
+    const bool sd_mounted = FileBrowser::mountSDCard(false, SDCARD_MOUNT_PATH);
 
+    // compiled-in chardefs are already loaded, so sdcard ones are optional
+    // (this is not true on the real cerberus)
+  	if (load("chardefs.bin", 0xf000) != STATUS_READY) {
+		//tone(SOUND, 50, 150);
+    }
     ccls();
     cprintFrames();
     cprintBanner();
@@ -530,7 +587,7 @@ void setup()
     cprintStatus(STATUS_DEFAULT);
     clearEditLine();
 
-    if (!FileBrowser::mountSDCard(false, SDCARD_MOUNT_PATH)) {
+    if (!sd_mounted) {
         errPrint("Failed to mount SDCard");
     }
 }
@@ -543,7 +600,9 @@ int readKey() {
             fabgl::VirtualKeyItem key;
             bool success = keyboard->getNextVirtualKey(&key, 0);
             if (success && key.down) {
-                if (key.ASCII) {
+                if (key.ASCII == 8) {
+                    return PS2_BACKSPACE;
+                } else if (key.ASCII) {
                     return key.ASCII;
                 } else {
                     return -key.vk;
@@ -569,6 +628,32 @@ String getNextWord(bool fromTheBeginning) {
   nextWord[j - i] = 0;            /** Null-termination **/
   initialPosition = j;            /** Next time round, start from here, unless... **/
   return (nextWord);              /** Return the contents of the buffer **/
+}
+
+void binMove(String startAddr, String endAddr, String destAddr) {
+  unsigned int start, finish, destination;                /** Memory addresses **/
+  unsigned int i;                                         /** Address counter **/
+  if (startAddr == "") cprintStatus(STATUS_MISSING_OPERAND);                   /** Missing the file's name **/
+  else {
+    start = strtol(startAddr.c_str(), NULL, 16);          /** Convert hexadecimal address string to unsigned int **/
+    if (endAddr == "") cprintStatus(STATUS_MISSING_OPERAND);                   /** Missing the file's name **/
+    else {
+      finish = strtol(endAddr.c_str(), NULL, 16);         /** Convert hexadecimal address string to unsigned int **/
+      if (destAddr == "") cprintStatus(STATUS_MISSING_OPERAND);                /** Missing the file's name **/
+      else {
+        destination = strtol(destAddr.c_str(), NULL, 16); /** Convert hexadecimal address string to unsigned int **/
+        if (finish < start) cprintStatus(STATUS_ADDRESS_ERROR);              /** Invalid address range **/
+        else if ((destination <= finish) && (destination >= start)) cprintStatus(STATUS_ADDRESS_ERROR); /** Destination cannot be within original range **/  
+        else {
+          for (i = start; i <= finish; i++) {
+            cpoke(destination, cpeek(i));
+            destination++;
+          }
+          cprintStatus(STATUS_READY);
+        }
+      }
+    }
+  }
 }
 
 void list(String address) {
@@ -635,11 +720,158 @@ void help() {
   cprintString(3, 24, F("F12 key: Quits CPU program"));
 }
 
-FILE *SD_open(String &filename) {
-	static char name[256];
-    snprintf(name, sizeof name, "%s/%s", SDCARD_MOUNT_PATH, filename.c_str());
+/**
+ * Warning: returns a static buffer
+ */
+const char *filenameToSdAbsPath(const char *filename) {
+    static char buf[256];
+    snprintf(buf, sizeof buf, "%s/%s", SDCARD_MOUNT_PATH, filename);
+    return buf;
+}
 
-    return fopen(name, "rb");
+FILE *SD_open(String &filename, const char *mode) {
+    return fopen(filenameToSdAbsPath(filename.c_str()), mode);
+}
+
+void SD_close(FILE *f) {
+    fclose(f);
+}
+
+bool SD_exists(String &filename) {
+    FILE *f = SD_open(filename, "r");
+    bool exists = !!f;
+    SD_close(f);
+    return exists;
+}
+
+int delFile(String filename) {
+	int status = STATUS_DEFAULT;
+  	/** Deletes a file from the uSD card **/
+  	if (!SD_exists(filename)) {
+		status = STATUS_NO_FILE;		/** The file doesn't exist, so stop with error **/
+	}
+  	else {
+        remove(filenameToSdAbsPath(filename.c_str()));
+	    //SD.remove(filename);          /** Delete the file **/
+	    status = STATUS_READY;
+  	}
+	return status;
+}
+
+void catDelFile(String filename) {
+	cprintStatus(delFile(filename));
+}
+
+int get_file_size(const char *filename)
+{
+    FILE *f = fopen(filenameToSdAbsPath(filename), "rb");
+    if (f) {
+        fseek(f, 0, SEEK_END);
+        int len = ftell(f);
+        fclose(f);
+        return len;
+    } else {
+        return 0;
+    }
+}
+
+void dir() {
+  /** Lists the files in the root directory of uSD card, if available **/
+  byte y = 2;                     /** Screen line **/
+  byte x = 0;                     /** Screen column **/
+  //File root;                      /** Root directory of uSD card **/
+  //File entry;                     /** A file on the uSD card **/
+  cls();
+  DIR *root = opendir(SDCARD_MOUNT_PATH);
+  //root = SD.open("/");            /** Go to the root directory of uSD card **/
+  while (true) {
+    struct dirent *entry = readdir(root);
+    //entry = root.openNextFile();  /** Open next file **/
+    if (!entry) {                 /** No more files on the uSD card **/
+      closedir(root);
+      //root.close();               /** Close root directory **/
+      cprintStatus(STATUS_READY);            /** Announce completion **/
+      break;                      /** Get out of this otherwise infinite while() loop **/
+    }
+    cprintString(3, y, entry->d_name);
+    cprintString(20, y, String(get_file_size(entry->d_name), DEC));
+    //entry.close();                /** Close file as soon as it is no longer needed **/
+    if (y < 24) y++;              /** Go to the next screen line **/
+    else {
+      cprintStatus(STATUS_SCROLL_PROMPT);            /** End of screen has been reached, needs to scrow down **/
+      for (x = 2; x < 40; x++) cprintChar(x, 29, ' '); /** Hide editline while waiting for key press **/
+      int key;
+      while (!(key = readKey()));
+      //while (!keyboard.available());/** Wait for a key to be pressed **/
+      if (key == PS2_ESC) { /** If the user pressed ESC, break and exit **/
+        tone(SOUND, 750, 5);      /** Clicking sound for auditive feedback to key press **/
+        closedir(root);
+        //root.close();             /** Close the directory before exiting **/
+        cprintStatus(STATUS_READY);
+        break;
+      } else {
+        tone(SOUND, 750, 5);      /** Clicking sound for auditive feedback to key press **/
+        cls();                    /** Clear the screen and... **/
+        y = 2;                    /** ...go back tot he top of the screen **/
+      }
+    }
+  }
+}
+
+int save(String filename, unsigned int startAddress, unsigned int endAddress) {
+  	/** Saves contents of a region of memory to a file on uSD card **/
+	int status = STATUS_DEFAULT;
+  	unsigned int i;                                     /** Memory address counter **/
+  	byte data;                                          /** Data from memory **/
+  	FILE *dataFile;                                      /** File to be created and written to **/
+	if (endAddress < startAddress) {
+		status = STATUS_ADDRESS_ERROR;            		/** Invalid address range **/
+	}
+	else {
+		if (filename == "") {
+			status = STATUS_MISSING_OPERAND;          	/** Missing the file's name **/
+		}
+		else {
+			if (SD_exists(filename)) {
+				status = STATUS_FILE_EXISTS;   				/** The file already exists, so stop with error **/
+			}
+			else {
+				dataFile = SD_open(filename, "wb"); /** Try to create the file **/
+				if (!dataFile) {
+					status = STATUS_CANNOT_OPEN;           /** Cannot create the file **/
+				}
+				else {                                    /** Now we can finally write into the created file **/
+					for(i = startAddress; i <= endAddress; i++) {
+						data = cpeek(i);
+                        fwrite(&data, 1, 1, dataFile);
+					}
+                    SD_close(dataFile);
+					status = STATUS_READY;
+				}
+			}
+		}
+	}
+	return status;
+}
+
+void catSave(String filename, String startAddress, String endAddress) {
+	unsigned int startAddr;
+	unsigned int endAddr;
+	int status = STATUS_DEFAULT;
+   	if (startAddress == "") {
+		status = STATUS_MISSING_OPERAND;               /** Missing operand **/
+	}
+	else {
+		startAddr = strtol(startAddress.c_str(), NULL, 16);
+		if(endAddress == "") {
+			status = STATUS_MISSING_OPERAND;
+		}
+		else {
+			endAddr = strtol(endAddress.c_str(), NULL, 16);
+			status = save(filename, startAddr, endAddr);
+		}
+	}
+	cprintStatus(status);
 }
 
 int load(String filename, unsigned int startAddr) {
@@ -657,7 +889,7 @@ int load(String filename, unsigned int startAddr) {
 	} 
     else {
 #endif /* 0 */
-      	dataFile = SD_open(filename);           /** Open the binary file **/
+      	dataFile = SD_open(filename, "rb");           /** Open the binary file **/
       	if (!dataFile) {
 			status = STATUS_CANNOT_OPEN; 		/** Cannot open the file **/
 	  	}
@@ -695,6 +927,53 @@ void catLoad(String filename, String startAddress, bool silent) {
 	}
 }
 
+void runCode() {
+  byte runL = config_code_start & 0xFF;
+  byte runH = config_code_start >> 8;
+
+  ccls();
+  /** REMEMBER:                           **/
+  /** Byte at config_outbox_flag is the new mail flag **/
+  /** Byte at config_outbox_data is the mail box      **/
+  cpoke(config_outbox_flag, 0x00);	/** Reset outbox mail flag	**/
+  cpoke(config_outbox_data, 0x00);	/** Reset outbox mail data	**/
+  cpoke(config_inbox_flag, 0x00);	/** Reset inbox mail flag	**/
+  if (!mode) {            /** We are in 6502 mode **/
+    /** Non-maskable interrupt vector points to 0xFCB0, just after video area **/
+    cpoke(0xFFFA, 0xB0);
+    cpoke(0xFFFB, 0xFC);
+    /** The interrupt service routine simply returns **/
+    // FCB0        RTI             40
+    cpoke(0xFCB0, 0x40);
+    /** Set reset vector to config_code_start, the beginning of the code area **/
+    cpoke(0xFFFC, runL);
+    cpoke(0xFFFD, runH);
+  } else {                /** We are in Z80 mode **/
+    /** The NMI service routine of the Z80 is at 0x0066 **/
+    /** It simply returns **/
+    // 0066   ED 45                  RETN 
+    cpoke(0x0066, 0xED);
+    cpoke(0x0067, 0x45);
+    /** The Z80 fetches the first instruction from 0x0000, so put a jump to the code area there **/
+    // 0000   C3 ll hh               JP   config_code_start
+	#if config_code_start != 0x0000
+    cpoke(0x0000, 0xC3);
+    cpoke(0x0001, runL);
+    cpoke(0x0002, runH);
+	#endif
+  }
+  z80.reset();
+  m6502.reset();
+  cpurunning = true;
+  //digitalWrite(CPURST, HIGH); /** Reset the CPU **/
+  //digitalWrite(CPUGO, HIGH);  /** Enable CPU buses and clock **/
+  //delay(50);
+  //digitalWrite(CPURST, LOW);  /** CPU should now initialize and then go to its reset vector **/
+  #if config_enable_nmi == 1
+  //Timer1.initialize(20000);
+  //Timer1.attachInterrupt(cpuInterrupt); /** Interrupt every 0.02 seconds - 50Hz **/
+  #endif
+}
 /************************************************************************************************/
 void enter() {  /** Called when the user presses ENTER, unless a CPU program is being executed **/
 /************************************************************************************************/
@@ -790,11 +1069,11 @@ void enter() {  /** Called when the user presses ENTER, unless a CPU program is 
     cprintStatus(STATUS_READY);
   /** DIR ***********************************************************************************/
   } else if (nextWord == F("dir")) {      /** Lists files on uSD card **/
-    //dir();
+    dir();
   /** DEL ***********************************************************************************/
   } else if (nextWord == F("del")) {      /** Deletes a file on uSD card **/
     nextWord = getNextWord(false);
-    //catDelFile(nextWord);
+    catDelFile(nextWord);
   /** LOAD **********************************************************************************/
   } else if (nextWord == F("load")) {     /** Loads a binary file into memory, at specified location **/
     nextWord = getNextWord(false);        /** Get the file name from the edit line **/
@@ -803,19 +1082,18 @@ void enter() {  /** Called when the user presses ENTER, unless a CPU program is 
   /** RUN ***********************************************************************************/
   } else if (nextWord == F("run")) {      /** Runs the code in memory **/
     for (i = 0; i < 38; i++) previousEditLine[i] = editLine[i]; /** Store edit line just executed **/
-    //runCode();
+    runCode();
   /** SAVE **********************************************************************************/
   } else if (nextWord == F("basic6502")) {
     mode = false;
     //digitalWrite(CPUSLC, LOW);
     catLoad("basic65.bin","", false); 
-    //runCode();
+    runCode();
   } else if (nextWord == F("basicz80")) {
     mode = true;
     //digitalWrite(CPUSLC, HIGH);
     catLoad("basicz80.bin","", false); 
-    //runCode();
-#if 0
+    runCode();
   } else if (nextWord == F("save")) {
     nextWord = getNextWord(false);						/** Start start address **/
     nextNextWord = getNextWord(false);					/** End address **/
@@ -828,7 +1106,6 @@ void enter() {  /** Called when the user presses ENTER, unless a CPU program is 
     nextNextNextWord = getNextWord(false);
     binMove(nextWord, nextNextWord, nextNextNextWord);
   /** HELP **********************************************************************************/
-#endif /* 0 */
   } else if ((nextWord == F("help")) || (nextWord == F("?"))) {
     help();
     cprintStatus(STATUS_POWER);
@@ -840,7 +1117,158 @@ void enter() {  /** Called when the user presses ENTER, unless a CPU program is 
   }
 }
 
-void loop()
+void stopCode() {
+    cpurunning = false;         /** Reset this flag **/
+#if 0
+    Timer1.detachInterrupt();
+    digitalWrite(CPURST, HIGH); /** Reset the CPU to bring its output signals back to original states **/ 
+    digitalWrite(CPUGO, LOW);   /** Tristate its buses to high-Z **/
+#endif /* 0 */
+    delay(50);                   /** Give it some time **/
+#if 0
+    digitalWrite(CPURST, LOW);  /** Finish reset cycle **/
+#endif /* 0 */
+
+    load("chardefs.bin", 0xf000);/** Reset the character definitions in case the CPU changed them **/
+    ccls();                     /** Clear screen completely **/
+    cprintFrames();             /** Reprint the wire frame in case the CPU code messed with it **/
+    cprintBanner();
+    cprintStatus(STATUS_DEFAULT);            /** Update status bar **/
+    clearEditLine();            /** Clear and display the edit line **/
+}
+
+// CPU Interrupt Routine (50hz)
+//
+void cpuInterrupt(void) {
+  	if(cpurunning) {							// Only run this code if cpu is running 
+	   	//digitalWrite(CPUIRQ, HIGH);		 		// Trigger an NMI interrupt
+	   	//digitalWrite(CPUIRQ, LOW);
+        if (mode) { z80.NMI(); } else { m6502.NMI(); }
+  	}
+	interruptFlag = true;
+}
+
+// Handle LOAD command from BASIC
+//
+int cmdLoad(unsigned int address) {
+  int result;
+  unsigned int startAddr = cpeekW(address);
+  cpeekStr(address + 4, editLine, 38);
+  errPrint((const char*)editLine);
+  result = load((char *)editLine, startAddr);
+  cpokeW(address+2, bytesRead);
+  
+  return result;
+}
+
+// Handle SAVE command from BASIC
+//
+int cmdSave(unsigned int address) {
+	unsigned int startAddr = cpeekW(address);
+	unsigned int length = cpeekW(address + 2);
+	cpeekStr(address + 4, editLine, 38);
+	return save((char *)editLine, startAddr, startAddr + length - 1);
+}
+
+DIR *cd;
+// Handle CAT command from BASIC
+//
+int cmdCatOpen(unsigned int address) {
+	cd = opendir(SDCARD_MOUNT_PATH);
+	return STATUS_READY;
+}
+
+int cmdCatEntry(unsigned int address) {		// Subsequent calls to this will read the directory entries
+	struct dirent *entry;
+	entry = readdir(cd);				// Open the next file
+	if(!entry) {							// If we've read past the last file in the directory
+		closedir(cd);
+		return STATUS_EOF;					// And return end of file
+	}
+    int filesize = get_file_size(entry->d_name);
+	cpokeL(address, filesize);			// First four bytes are the length
+	cpokeStr(address + 4, entry->d_name);	// Followed by the filename, zero terminated
+	//entry.close();							// Close the directory entry
+	return STATUS_READY;					// Return READY
+}
+
+// Handle ERASE command from BASIC
+//
+int cmdDelFile(unsigned int address) {
+	cpeekStr(address, editLine, 38);
+	return delFile((char *)editLine);	
+}
+
+// Inbox message handler
+//
+void messageHandler(void) {
+  	int	flag, status;
+  	byte retVal = 0x00;							// Return status; default is OK
+  	unsigned int address;						// Pointer for data
+
+ 	if(cpurunning) {							// Only run this code if cpu is running 
+	 	cpurunning = false;						// Just to prevent interrupts from happening
+		//digitalWrite(CPUGO, LOW); 				// Pause the CPU and tristate its buses to high-Z
+		flag = cpeek(config_inbox_flag);		// Fetch the inbox flag 
+                                                //
+        if(flag > 0 && flag < 0x80) {
+#ifdef DEBUG
+            debug_log("msg 0x%x\r\n", flag);
+#endif /* DEBUG */
+
+			address = cpeekW(config_inbox_data);
+			switch(flag) {
+				case 0x01:
+					//cmdSound(address);
+					break;
+				case 0x02: 
+					status = cmdLoad(address);
+					if(status != STATUS_READY) {
+						retVal = (byte)(status + 0x80);
+					}
+					break;
+				case 0x03:
+					status = cmdSave(address);
+					if(status != STATUS_READY) {
+						retVal = (byte)(status + 0x80);
+					}
+					break;
+				case 0x04:
+					status = cmdDelFile(address);
+					if(status != STATUS_READY) {
+						retVal = (byte)(status + 0x80);
+					}
+					break;
+				case 0x05:
+					status = cmdCatOpen(address);
+					if(status != STATUS_READY) {
+						retVal = (byte)(status + 0x80);
+					}
+					break;
+				case 0x06:
+					status = cmdCatEntry(address);
+					if(status != STATUS_READY) {
+						retVal = (byte)(status + 0x80);
+					}
+					break;
+#if 0
+                case 0x7E:
+                  cmdSoundNb(address);
+                  status = STATUS_READY;
+                  break;
+#endif /* 0 */
+                        case 0x7F:
+                            resetFunc();
+                            break;
+			}
+			cpoke(config_inbox_flag, retVal);	// Flag we're done - values >= 0x80 are error codes
+		}
+		//digitalWrite(CPUGO, HIGH);   			// Restart the CPU 
+		cpurunning = true;
+ 	}
+}
+
+void cat_loop()
 {
     // wait vblank
     //ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
@@ -851,9 +1279,10 @@ void loop()
 	if(ascii != 0) {
     	if(cpurunning) {
     		if (ascii == PS2_F12) {  /** This happens if F1 has been pressed... and so on... **/
-	    		//stopCode();
+	    		stopCode();
     		}
-    		else {
+    		//else {
+            else if (ascii > 0) {
 				cpurunning = false;						/** Just stops interrupts from happening **/
         		//digitalWrite(CPUGO, LOW);   			/** Pause the CPU and tristate its buses to high-Z **/
       			byte mode = cpeek(config_outbox_flag);
@@ -890,6 +1319,7 @@ void loop()
         			cprintEditLine();   /** Print the updated edit line **/
         			break;
         		default:
+                    if (ascii < 0) break;
 		        	editLine[pos] = ascii;  /** Put new character in current cursor position **/
         			if (pos < 37) pos++;    /** Update cursor position **/
         			editLine[pos] = 0;      /** Place cursor to the right of new character **/
@@ -902,9 +1332,7 @@ void loop()
 	}
 	if(interruptFlag) {						/** If the interrupt flag is set then **/
 		interruptFlag = false;
-#if 0
 		messageHandler();					/** Run the inbox message handler **/
-#endif /* 0 */
 	}
 #if 0
 	// Now we deal with bus access requests from the expansion card
@@ -933,4 +1361,42 @@ void loop()
     expflag = false; // Reset the flag
   }
 #endif /* 0 */
+}
+
+void debug_log(const char *format, ...) {
+	#if DEBUG == 1
+	va_list ap;
+	va_start(ap, format);
+	auto size = vsnprintf(nullptr, 0, format, ap) + 1;
+	if (size > 0) {
+		va_end(ap);
+		va_start(ap, format);
+		char buf[size + 1];
+		vsnprintf(buf, size, format, ap);
+		Serial.print(buf);
+	}
+	va_end(ap);
+	#endif
+}
+
+void loop()
+{
+    char buf[64];
+    int64_t t = esp_timer_get_time();
+    for (;;) {
+        cpuInterrupt();
+        cat_loop();
+        cpu_clockcycles(fast ? 160000 : 80000); // 8 mhz cycles in 0.02 seconds
+
+        // 50Hz timer (every 0.02 seconds)
+        int64_t now;
+        do {
+            now = esp_timer_get_time();
+        } while (now - t < 20000);
+
+#ifdef DEBUG
+        debug_log("50Hz real elapsed: %lld\r\n", now - t);
+#endif /* DEBUG */
+        t = now;
+    }
 }
