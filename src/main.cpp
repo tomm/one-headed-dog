@@ -494,12 +494,23 @@ void clearEditLine() {
   	cprintEditLine();
 }
 
+uint8_t cerb_color[8];
+void setup_colours() {
+    cerb_color[0] = VGAController.createRawPixel(RGB222(0, 3, 0));
+    cerb_color[1] = VGAController.createRawPixel(RGB222(3, 0, 0));
+    cerb_color[2] = VGAController.createRawPixel(RGB222(0, 0, 3));
+    cerb_color[3] = VGAController.createRawPixel(RGB222(3, 3, 0));
+    cerb_color[4] = VGAController.createRawPixel(RGB222(0, 3, 3));
+    cerb_color[5] = VGAController.createRawPixel(RGB222(3, 0, 3));
+    cerb_color[6] = VGAController.createRawPixel(RGB222(0, 0, 0));
+    cerb_color[7] = VGAController.createRawPixel(RGB222(3, 3, 3));
+}
+
 void IRAM_ATTR drawCerberusScanline(void * arg, uint8_t * dest, int scanLine)
 {
     // vid ram at 0xf800 (40x30 bytes)
     // char ram at 0xf000 (2 KiB)
-    auto fgcolor = VGAController.createRawPixel(RGB222(3, 3, 3));
-    auto bgcolor = VGAController.createRawPixel(RGB222(0, 0, 0));
+    const uint8_t bgcolor = cerb_color[6];
 
     auto width  = VGAController.getScreenWidth();
     auto height = VGAController.getScreenHeight();
@@ -512,6 +523,10 @@ void IRAM_ATTR drawCerberusScanline(void * arg, uint8_t * dest, int scanLine)
         // what line in the tile (0-7)
         int tile_line = (scanLine & 0xf) >> 1;
         uint8_t tile_dat = cerb_ram[0xf000 + tile_num*8 + tile_line];
+        uint8_t fgcolor = cerb_color[7];
+        if (tile_num >= 8 && tile_num < 32) {
+            fgcolor = cerb_color[(tile_num-8)%6];
+        }
 
         for (int p=0; p<8; p++) {
             const auto color = tile_dat & (0x80>>p) ? fgcolor : bgcolor;
@@ -570,6 +585,7 @@ void setup()
     VGAController.setScanlinesPerCallBack(scanlinesPerCallback);
     VGAController.setDrawScanlineCallback(drawCerberusScanline);
     VGAController.setResolution(VGA_640x480_60Hz);
+    setup_colours();
     
     const bool sd_mounted = FileBrowser::mountSDCard(false, SDCARD_MOUNT_PATH);
 
