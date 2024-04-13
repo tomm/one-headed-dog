@@ -3,8 +3,6 @@
 #include "fabglconf.h"
 #include "fabutils.h"
 #include <dirent.h>
-#include "emudevs/Z80.h"
-#include "emudevs/MOS6502.h"
 #include "cerberus.h"
 #include <string.h>
 
@@ -560,8 +558,6 @@ void load_chardefs() {
     memcpy(&cerb_ram[0xf000], chardefs, sizeof chardefs);
 }
 
-extern fabgl::Z80 z80; // in emu_cpu.cpp
-extern fabgl::MOS6502 m6502; // in emu_cpu.cpp
 extern void init_cpus(); // in emu_cpu.cpp
 extern void cpu_clockcycles(int num_clocks);
 
@@ -978,8 +974,7 @@ void runCode() {
     cpoke(0x0002, runH);
 	#endif
   }
-  z80.reset();
-  m6502.reset();
+  cpu_reset();
   cpurunning = true;
   //digitalWrite(CPURST, HIGH); /** Reset the CPU **/
   //digitalWrite(CPUGO, HIGH);  /** Enable CPU buses and clock **/
@@ -1159,7 +1154,7 @@ void cpuInterrupt(void) {
   	if(cpurunning) {							// Only run this code if cpu is running 
 	   	//digitalWrite(CPUIRQ, HIGH);		 		// Trigger an NMI interrupt
 	   	//digitalWrite(CPUIRQ, LOW);
-        if (mode) { z80.NMI(); } else { m6502.NMI(); }
+        if (mode) { cpu_z80_nmi(); } else { cpu_6502_nmi(); }
   	}
 	interruptFlag = true;
 }
@@ -1170,7 +1165,6 @@ int cmdLoad(unsigned int address) {
   int result;
   unsigned int startAddr = cpeekW(address);
   cpeekStr(address + 4, editLine, 38);
-  errPrint((const char*)editLine);
   result = load((char *)editLine, startAddr);
   cpokeW(address+2, bytesRead);
   
