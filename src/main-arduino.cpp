@@ -31,7 +31,7 @@ void IRAM_ATTR drawCerberusScanline(void* arg, uint8_t* dest, int scanLine)
     const int char_line = 0xf800 + (scanLine >> 3) * 40;
     int tile_line = 0xf000;
 
-    for (int _line=0; _line<scanlinesPerCallback; _line++, tile_line++) {
+    for (int _line = 0; _line < scanlinesPerCallback; _line++, tile_line++) {
         // Drawing 2 scanlines per call to drawScanline. Since cerberus
         // doubles the scanlines, we duplicate the pixel data onto the second scanline
         for (int col = 0; col < 40; col++) {

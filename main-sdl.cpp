@@ -3,15 +3,15 @@
 #include <SDL2/SDL_render.h>
 #include <cstring>
 #include <deque>
-#include <thread>
 #include <mutex>
+#include <thread>
 
 // stuff from cat.cpp
 extern void cat_setup();
 extern volatile bool fast;
 extern volatile bool mode;
 extern void runCode();
-extern char *autoloadBinaryFilename;
+extern char* autoloadBinaryFilename;
 
 static std::deque<uint8_t> keyQueue;
 static std::mutex keyQueueMutex;
@@ -86,11 +86,12 @@ static void loop()
         typeof(t) now;
         for (;;) {
             now = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
-            if (now - t >= 20000) break;
+            if (now - t >= 20000)
+                break;
             std::this_thread::sleep_for(1ms);
         }
 
-        //debug_log("CPU clock %.2f MHz\r\n", (fast ? 8.0 : 4.0) * 20000.0/ (now - t));
+        // debug_log("CPU clock %.2f MHz\r\n", (fast ? 8.0 : 4.0) * 20000.0/ (now - t));
         t = now;
     }
 }
@@ -117,14 +118,12 @@ int main(int argc, char* argv[])
     SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
     SDL_Texture* tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGB24, SDL_TEXTUREACCESS_STREAMING, 320, 240);
 
-    for (int arg=1; arg<argc; arg++) {
+    for (int arg = 1; arg < argc; arg++) {
         if (strcmp(argv[arg], "-z80") == 0) {
             mode = true;
-        }
-        else if (strcmp(argv[arg], "-6502") == 0) {
+        } else if (strcmp(argv[arg], "-6502") == 0) {
             mode = false;
-        }
-        else {
+        } else {
             fprintf(stderr, "Loading binary to $205: %s\n", argv[arg]);
             autoloadBinaryFilename = argv[arg];
         }
@@ -140,7 +139,7 @@ int main(int argc, char* argv[])
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_TEXTINPUT) {
                 auto lock = std::unique_lock<std::mutex>(keyQueueMutex);
-                for (size_t i=0; i<strlen(event.text.text); i++) {
+                for (size_t i = 0; i < strlen(event.text.text); i++) {
                     keyQueue.push_back(event.text.text[i]);
                 }
                 break;

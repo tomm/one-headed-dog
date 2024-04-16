@@ -55,4 +55,3 @@ extern void cpu_clockcycles(int num_clocks);
 #define PS2_LEFTARROW 8
 #define PS2_DOWNARROW 10
 #define PS2_RIGHTARROW 21
-

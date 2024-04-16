@@ -33,18 +33,19 @@ static inline void m_writeWord(void* context, int addr, int value)
     cpokeW(addr, value);
 }
 static inline int m_readIO(void* context, int addr) { return 0; }
-static inline void m_writeIO(void* context, int addr, int value) { 
+static inline void m_writeIO(void* context, int addr, int value)
+{
 #ifdef PLATFORM_SDL
-    Z80 *z80 = static_cast<Z80*>(context);
+    Z80* z80 = static_cast<Z80*>(context);
     fprintf(stderr, "OUT($%02x) debug trigger: BC=%04x DE=%04x HL=%04x AF=%04x IX=%04x IY=%04x SP=%04x\n",
-            addr,
-            z80->readRegWord(Z80_BC),
-            z80->readRegWord(Z80_DE),
-            z80->readRegWord(Z80_HL),
-            z80->readRegWord(Z80_AF),
-            z80->readRegWord(Z80_IX),
-            z80->readRegWord(Z80_IY),
-            z80->readRegWord(Z80_SP));
+        addr,
+        z80->readRegWord(Z80_BC),
+        z80->readRegWord(Z80_DE),
+        z80->readRegWord(Z80_HL),
+        z80->readRegWord(Z80_AF),
+        z80->readRegWord(Z80_IX),
+        z80->readRegWord(Z80_IY),
+        z80->readRegWord(Z80_SP));
 #endif
 }
 

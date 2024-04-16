@@ -1,17 +1,17 @@
 #include "cerberus.h"
 #include <chrono>
+#include <cstdarg>
+#include <cstring>
 #include <deque>
 #include <dirent.h>
-#include <cstring>
 #include <string>
 #include <thread>
-#include <cstdarg>
 
 typedef uint8_t byte;
 typedef bool boolean;
 #define F(a) (a)
 
-char *autoloadBinaryFilename = nullptr;
+char* autoloadBinaryFilename = nullptr;
 
 int load(std::string filename, unsigned int startAddr);
 
@@ -341,13 +341,15 @@ boolean cpeekStr(unsigned int address, volatile char* dest, int max)
 }
 #define tone(a, b, c)
 
-std::string toDecimal(int val) {
+std::string toDecimal(int val)
+{
     char buf[64];
     snprintf(buf, sizeof buf, "%d", val);
     return std::string(buf);
 }
 
-std::string toHex(int val) {
+std::string toHex(int val)
+{
     char buf[64];
     snprintf(buf, sizeof buf, "%x", val);
     return std::string(buf);
@@ -667,7 +669,8 @@ void help()
     cprintString(3, 24, F("F12 key: Quits CPU program"));
 }
 
-const char *filenameToSdAbsPath(const char *filename) {
+const char* filenameToSdAbsPath(const char* filename)
+{
     static char buf[256];
     snprintf(buf, sizeof buf, "%s/%s", SDCARD_MOUNT_PATH, filename);
     return buf;
@@ -743,7 +746,8 @@ void dir()
             break; /** Get out of this otherwise infinite while() loop **/
         }
         // skip directories
-        if (entry->d_type & DT_DIR) continue;
+        if (entry->d_type & DT_DIR)
+            continue;
         cprintString(3, y, entry->d_name);
         cprintString(20, y, toDecimal(get_file_size(entry->d_name)));
         // entry.close();                /** Close file as soon as it is no longer needed **/
@@ -933,7 +937,7 @@ void enter()
     std::string nextWord, nextNextWord, nextNextNextWord; /** General-purpose strings **/
     nextWord = getNextWord(true); /** Get the first word in the edit line **/
     /** Ignore capitals **/
-    for (int i=0; i<nextWord.size(); i++) {
+    for (int i = 0; i < nextWord.size(); i++) {
         nextWord[i] = tolower(nextWord[i]);
     }
     if (nextWord.length() == 0) { /** Ignore empty line **/
@@ -1143,7 +1147,8 @@ int cmdCatOpen(unsigned int address)
 int cmdCatEntry(unsigned int address)
 { // Subsequent calls to this will read the directory entries
     struct dirent* entry;
-    if (!cd) return STATUS_EOF;
+    if (!cd)
+        return STATUS_EOF;
 
     // find the next entry (that isn't a directory)
     do {
@@ -1337,4 +1342,3 @@ void cat_loop()
   }
 #endif /* 0 */
 }
-

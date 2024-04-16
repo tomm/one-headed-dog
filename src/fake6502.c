@@ -762,12 +762,12 @@ FAKE6502_FN_OPCODE(nop)
 {
 #ifdef PLATFORM_SDL
     fprintf(stderr, "NOP debug trigger: A=%02x X=%02x Y=%02x S=%02x PC=%04x Flags=%02x\n",
-            c->cpu.a,
-            c->cpu.x,
-            c->cpu.y,
-            c->cpu.s,
-            c->cpu.pc,
-            c->cpu.flags);
+        c->cpu.a,
+        c->cpu.x,
+        c->cpu.y,
+        c->cpu.s,
+        c->cpu.pc,
+        c->cpu.flags);
 #endif
 }
 
