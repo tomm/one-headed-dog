@@ -1,6 +1,7 @@
 #include "src/cerberus.h"
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_render.h>
+#include <SDL2/SDL_video.h>
 #include <cstring>
 #include <deque>
 #include <mutex>
@@ -27,6 +28,19 @@ const uint8_t cerb_color[8][3] = {
     { 255, 255, 255 }
 };
 uint8_t buf[320 * 240 * 3];
+
+SDL_Window* window = NULL;
+
+SDL_Rect calc_4_3_output_rect()
+{
+    int wx, wy;
+    SDL_GetWindowSize(window, &wx, &wy);
+    if (wx > 4 * wy / 3) {
+        return SDL_Rect { (wx - 4 * wy / 3) >> 1, 0, 4 * wy / 3, wy };
+    } else {
+        return SDL_Rect { 0, (wy - 3 * wx / 4) >> 1, wx, 3 * wx / 4 };
+    }
+}
 
 void draw_screen(SDL_Renderer* renderer, SDL_Texture* tex)
 {
@@ -55,9 +69,11 @@ void draw_screen(SDL_Renderer* renderer, SDL_Texture* tex)
         }
     }
 
+    SDL_Rect dest_rect = calc_4_3_output_rect();
+
     SDL_UpdateTexture(tex, NULL, buf, 320 * 3);
     SDL_RenderClear(renderer);
-    SDL_RenderCopy(renderer, tex, NULL, NULL);
+    SDL_RenderCopy(renderer, tex, NULL, &dest_rect);
     SDL_RenderPresent(renderer);
 }
 
@@ -98,7 +114,6 @@ static void loop()
 
 int main(int argc, char* argv[])
 {
-    SDL_Window* window = NULL;
     if (SDL_Init(SDL_INIT_VIDEO) < 0) {
         fprintf(stderr, "could not initialize sdl2: %s\n", SDL_GetError());
         return 1;
@@ -107,7 +122,7 @@ int main(int argc, char* argv[])
         "One-Headed-Dog Cerberus 2100 Emulator",
         SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
         640, 480,
-        SDL_WINDOW_SHOWN);
+        SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
     if (window == NULL) {
         fprintf(stderr, "could not create window: %s\n", SDL_GetError());
         return 1;
@@ -199,4 +214,9 @@ void debug_log(const char* format, ...)
     }
     va_end(ap);
 #endif /* DEBUG */
+}
+
+void platform_delay(int ms)
+{
+    SDL_Delay(ms);
 }

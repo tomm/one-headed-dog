@@ -84,9 +84,14 @@ void errPrint(const char* msg)
 
 void setup()
 {
+    disableCore0WDT();
+    disableCore1WDT();
+
     Serial.begin(115200);
     Serial.print("setup() running on core ");
     Serial.println(xPortGetCoreID());
+    Serial.print("FabGL video on core ");
+    Serial.println(FABGLIB_VIDEO_CPUINTENSIVE_TASKS_CORE);
 
     PS2Controller.begin(PS2Preset::KeyboardPort0_MousePort1, KbdMode::CreateVirtualKeysQueue);
     PS2Controller.keyboard()->setLayout(&fabgl::UKLayout);
@@ -143,10 +148,13 @@ int readKey()
     return 0;
 }
 
-void loop()
+void _loop(void*)
 {
     char buf[64];
     int64_t t = esp_timer_get_time();
+
+    Serial.print("_loop() running on core ");
+    Serial.println(xPortGetCoreID());
 
     for (;;) {
         cpuInterrupt();
@@ -168,6 +176,17 @@ void loop()
     }
 }
 
+// Don't run the CPU emulation on the same core as intensive FabGL video tasks
+#define CPU_EMU_CORE (FABGLIB_VIDEO_CPUINTENSIVE_TASKS_CORE ^ 1)
+
+static TaskHandle_t loopTaskHandle = NULL;
+void loop()
+{
+    xTaskCreatePinnedToCore(_loop, "loop", 4096, NULL, 1, &loopTaskHandle, CPU_EMU_CORE);
+    for (;;)
+        delay(1000);
+}
+
 void debug_log(const char* format, ...)
 {
 #ifdef DEBUG
@@ -183,4 +202,9 @@ void debug_log(const char* format, ...)
     }
     va_end(ap);
 #endif /* DEBUG */
+}
+
+void platform_delay(int ms)
+{
+    delay(ms);
 }

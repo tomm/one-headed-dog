@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ps2.h"
 #include <stdint.h>
 
 #define DEBUG
@@ -14,6 +15,7 @@ void debug_log(const char* format, ...) __attribute__((format(printf, 1, 2)));
 
 // main.cpp
 extern int readKey();
+extern void platform_delay(int ms);
 
 // CAT firmware state
 extern void cpuInterrupt(void);
@@ -43,15 +45,3 @@ extern void init_cpus();
 extern void cpu_z80_nmi();
 extern void cpu_6502_nmi();
 extern void cpu_clockcycles(int num_clocks);
-
-// PS2 defines
-#define PS2_ESC 27
-#define PS2_F12 1
-#define PS2_ENTER 13
-// yeah these really are the same in PS2Keyboard.h
-#define PS2_DELETE 127
-#define PS2_BACKSPACE 127
-#define PS2_UPARROW 11
-#define PS2_LEFTARROW 8
-#define PS2_DOWNARROW 10
-#define PS2_RIGHTARROW 21

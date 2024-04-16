@@ -14,6 +14,8 @@ typedef bool boolean;
 char* autoloadBinaryFilename = nullptr;
 
 int load(std::string filename, unsigned int startAddr);
+bool SD_exists(std::string& filename);
+FILE* SD_open(std::string& filename, const char* mode);
 
 void runCode();
 
@@ -475,14 +477,33 @@ void cprintStatus(byte status)
 
 void cprintBanner()
 {
-    /** Load the CERBERUS icon image on the screen ************/
-    const uint8_t* dataFile2 = cerbicon_img;
-    for (uint8_t y = 3; y <= 25; y++) {
-        for (uint8_t x = 2; x <= 39; x++) {
-            int inChar = *dataFile2;
-            dataFile2++;
+    auto filename = std::string("cerbicon.img");
+    if (!SD_exists(filename)) {
+        // Show hardcoded startup image
+        const uint8_t* dataFile2 = cerbicon_img;
+        for (uint8_t y = 3; y <= 25; y++) {
+            for (uint8_t x = 2; x <= 39; x++) {
+                int inChar = *dataFile2;
+                dataFile2++;
 
-            cprintChar(x, y, inChar);
+                cprintChar(x, y, inChar);
+            }
+        }
+    } else {
+        /** Load the CERBERUS icon image on the screen ************/
+        int inChar;
+        FILE* dataFile2 = SD_open(filename, "rb"); /** Open the image file **/
+        if (!dataFile2) {
+            // tone(SOUND, 50, 150);     /** Tone out an error if file can't be opened  **/
+        } else {
+            for (byte y = 3; y <= 25; y++) {
+                for (byte x = 2; x <= 39; x++) {
+                    inChar = fgetc(dataFile2);
+
+                    cprintChar(x, y, inChar);
+                }
+            }
+            fclose(dataFile2);
         }
     }
 }
@@ -690,7 +711,8 @@ bool SD_exists(std::string& filename)
 {
     FILE* f = SD_open(filename, "r");
     bool exists = !!f;
-    SD_close(f);
+    if (f)
+        SD_close(f);
     return exists;
 }
 
@@ -759,7 +781,7 @@ void dir()
                 cprintChar(x, 29, ' '); /** Hide editline while waiting for key press **/
             int key;
             while (!(key = readKey()))
-                ;
+                platform_delay(10);
             // while (!keyboard.available());/** Wait for a key to be pressed **/
             if (key == PS2_ESC) { /** If the user pressed ESC, break and exit **/
                 tone(SOUND, 750, 5); /** Clicking sound for auditive feedback to key press **/
@@ -1062,6 +1084,8 @@ void enter()
         nextNextWord = getNextWord(false);
         nextNextNextWord = getNextWord(false);
         binMove(nextWord, nextNextWord, nextNextNextWord);
+    } else if (nextWord == F("kidney")) {
+        center(F("Sorry, I can't pee on your desk!"));
         /** HELP **********************************************************************************/
     } else if ((nextWord == F("help")) || (nextWord == F("?"))) {
         help();
@@ -1188,9 +1212,7 @@ void messageHandler(void)
         flag = cpeek(config_inbox_flag); // Fetch the inbox flag
                                          //
         if (flag > 0 && flag < 0x80) {
-#ifdef DEBUG
-            debug_log("CAT bios call 0x%x\r\n", flag);
-#endif /* DEBUG */
+            //debug_log("CAT bios call 0x%x\r\n", flag);
 
             address = cpeekW(config_inbox_data);
             switch (flag) {
@@ -1227,14 +1249,16 @@ void messageHandler(void)
                     retVal = (byte)(status + 0x80);
                 }
                 break;
-#if 0
-                case 0x7E:
-                  cmdSoundNb(address);
-                  status = STATUS_READY;
-                  break;
-#endif /* 0 */
+            case 0x7E:
+                debug_log("Unimplemented std BIOS call 0x7E\r\n");
+                // cmdSoundNb(address);
+                status = STATUS_READY;
+                break;
             case 0x7F:
                 resetFunc();
+                break;
+            default:
+                debug_log("Unknown BIOS call 0x%x\r\n", flag);
                 break;
             }
             cpoke(config_inbox_flag, retVal); // Flag we're done - values >= 0x80 are error codes
